@@ -2,8 +2,13 @@
 
 # Variables
 CONTAINER_ENGINE ?= podman
+IMAGE_REGISTRY ?= quay.io
+IMAGE_USER ?= dbewley
 IMAGE_NAME ?= ocp-console-plugin
 IMAGE_TAG ?= latest
+
+# Derived Variables
+REMOTE_IMAGE ?= $(IMAGE_REGISTRY)/$(IMAGE_USER)/$(IMAGE_NAME):$(IMAGE_TAG)
 
 .PHONY: help install build dev clean lint test image deploy
 
@@ -25,6 +30,9 @@ dev: ## Start the development server
 clean: ## Clean build artifacts
 	npm run clean
 
+clean-all: ## Clean all build artifacts including node_modules
+	rm -rf dist node_modules package-lock.json
+
 lint: ## Lint the source code
 	npm run lint
 
@@ -33,6 +41,11 @@ test: ## Run tests
 
 image: ## Build the container image
 	$(CONTAINER_ENGINE) build -t $(IMAGE_NAME):$(IMAGE_TAG) .
+
+push: image ## Tag and push the image to the registry
+	@echo "Pushing to $(REMOTE_IMAGE)"
+	$(CONTAINER_ENGINE) tag $(IMAGE_NAME):$(IMAGE_TAG) $(REMOTE_IMAGE)
+	$(CONTAINER_ENGINE) push $(REMOTE_IMAGE)
 
 deploy: ## Apply manifests to the cluster (requires logged in session)
 	oc apply -k manifests/

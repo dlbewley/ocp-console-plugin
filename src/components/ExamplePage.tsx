@@ -9,7 +9,7 @@ const ExamplePage: React.FC = () => {
                 <title>Example Plugin Page</title>
             </Helmet>
             <Page>
-                <PageSection variant="light">
+                <PageSection>
                     <Title headingLevel="h1">Example Plugin Page</Title>
                 </PageSection>
                 <PageSection>

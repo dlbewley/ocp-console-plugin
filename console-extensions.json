@@ -17,5 +17,33 @@
             "name": "Example Plugin Page",
             "href": "/example-page"
         }
+    },
+    {
+        "type": "console.page/route",
+        "properties": {
+            "path": "/pod-list",
+            "component": {
+                "$codeRef": "PodList"
+            }
+        }
+    },
+    {
+        "type": "console.page/route",
+        "properties": {
+            "path": "/pod-details/:ns/:name",
+            "component": {
+                "$codeRef": "PodDetails"
+            }
+        }
+    },
+    {
+        "type": "console.navigation/href",
+        "properties": {
+            "id": "pod-list-nav",
+            "perspective": "admin",
+            "section": "home",
+            "name": "Pod List",
+            "href": "/pod-list"
+        }
     }
 ]
