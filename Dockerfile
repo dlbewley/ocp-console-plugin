@@ -14,6 +14,12 @@ RUN npm run build
 
 FROM nginx:1.21-alpine
 
+# Support running as arbitrary user which belogs to the root group
+RUN chmod g+rwx /var/cache/nginx /var/run /var/log/nginx && \
+    chgrp -R root /var/cache/nginx && \
+    sed -i.bak 's/^user/#user/' /etc/nginx/nginx.conf && \
+    addgroup nginx root
+
 COPY --from=builder /usr/src/app/dist /usr/share/nginx/html
 
 COPY nginx.conf /etc/nginx/conf.d/default.conf

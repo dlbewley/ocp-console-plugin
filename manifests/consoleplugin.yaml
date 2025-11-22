@@ -9,5 +9,5 @@ spec:
     service:
       basePath: /
       name: ocp-console-plugin
-      namespace: default
+      namespace: ocp-console-example
       port: 9443
