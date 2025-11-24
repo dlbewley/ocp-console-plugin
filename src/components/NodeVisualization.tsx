@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { Card, CardBody, CardTitle, Popover, Button, DescriptionList, DescriptionListTerm, DescriptionListGroup, DescriptionListDescription } from '@patternfly/react-core';
-import { NetworkIcon, ServerIcon, TopologyIcon, CubeIcon } from '@patternfly/react-icons';
+import { NetworkIcon, ServerIcon, TopologyIcon, CubeIcon, RouteIcon } from '@patternfly/react-icons';
 
 interface NodeVisualizationProps {
     nns: any; // NodeNetworkState resource
@@ -14,7 +14,7 @@ const NodeVisualization: React.FC<NodeVisualizationProps> = ({ nns, cudns = [], 
     const bridgeMappings = ovn['bridge-mappings'] || [];
 
     // Simple layout logic
-    const width = 1400; // Increased width for new columns
+    const width = 1600; // Increased width for new columns
     const height = 800;
     const padding = 50;
     const itemHeight = 80;
@@ -71,6 +71,31 @@ const NodeVisualization: React.FC<NodeVisualizationProps> = ({ nns, cudns = [], 
         nodePositions[`cudn-${cudn.metadata.name}`] = { x: padding + (colSpacing * 5), y: padding + (index * (itemHeight + 20)) };
     });
 
+    // Attachments (from CUDN status)
+    const attachmentNodes: any[] = [];
+    cudns.forEach((cudn: any) => {
+        const condition = cudn.status?.conditions?.find((c: any) => c.type === 'NetworkCreated' && c.status === 'True');
+        if (condition && condition.message) {
+            const match = condition.message.match(/\[(.*?)\]/);
+            if (match && match[1]) {
+                const namespaces = match[1].split(',').map((ns: string) => ns.trim());
+                namespaces.forEach((ns: string) => {
+                    attachmentNodes.push({
+                        name: ns,
+                        type: 'attachment',
+                        namespace: ns,
+                        cudn: cudn.metadata.name
+                    });
+                });
+            }
+        }
+    });
+
+    // Attachments positions
+    attachmentNodes.forEach((node: any, index: number) => {
+        nodePositions[`attachment-${node.cudn}-${node.namespace}`] = { x: padding + (colSpacing * 6), y: padding + (index * (itemHeight + 20)) };
+    });
+
     // Dynamic height calculation
     const maxRows = Math.max(
         ethInterfaces.length,
@@ -79,6 +104,7 @@ const NodeVisualization: React.FC<NodeVisualizationProps> = ({ nns, cudns = [], 
         logicalInterfaces.length,
         bridgeMappings.length,
         cudns.length,
+        attachmentNodes.length,
         Math.ceil(otherInterfaces.length / 4) + 2
     );
     const calculatedHeight = Math.max(600, padding + (maxRows * (itemHeight + 20)) + 200);
@@ -90,8 +116,9 @@ const NodeVisualization: React.FC<NodeVisualizationProps> = ({ nns, cudns = [], 
             case 'linux-bridge':
             case 'ovs-bridge': return <CubeIcon />;
             case 'ovs-interface': return <NetworkIcon />; // Logical
-            case 'ovn-mapping': return <NetworkIcon />;
+            case 'ovn-mapping': return <RouteIcon />;
             case 'cudn': return <NetworkIcon />;
+            case 'attachment': return <NetworkIcon />;
             default: return <NetworkIcon />;
         }
     };
@@ -111,11 +138,24 @@ const NodeVisualization: React.FC<NodeVisualizationProps> = ({ nns, cudns = [], 
             <line
                 key={`${startNode}-${endNode}`}
                 x1={x1} y1={y1} x2={x2} y2={y2}
-                stroke="#999"
+                stroke="currentColor"
                 strokeWidth="2"
-                markerEnd="url(#arrowhead)"
             />
         );
+    };
+
+    // State for Popover
+    const [activeNode, setActiveNode] = React.useState<any>(null);
+    const [anchorElement, setAnchorElement] = React.useState<any>(null);
+
+    const handleNodeClick = (event: React.MouseEvent, iface: any) => {
+        setAnchorElement(event.currentTarget);
+        setActiveNode(iface);
+    };
+
+    const handlePopoverClose = () => {
+        setActiveNode(null);
+        setAnchorElement(null);
     };
 
     const renderInterfaceNode = (iface: any, x: number, y: number, color: string, typeOverride?: string) => {
@@ -133,12 +173,20 @@ const NodeVisualization: React.FC<NodeVisualizationProps> = ({ nns, cudns = [], 
             displayName = iface.metadata.name;
             displayType = 'CUDN';
             displayState = iface.spec?.network?.topology || 'Unknown';
+        } else if (type === 'attachment') {
+            displayName = iface.namespace;
+            displayType = 'Namespace';
+            displayState = 'Attached';
         }
 
         return (
-            <g transform={`translate(${x}, ${y})`} style={{ cursor: 'pointer' }}>
+            <g
+                transform={`translate(${x}, ${y})`}
+                style={{ cursor: 'pointer' }}
+                onClick={(e) => handleNodeClick(e, iface)}
+            >
                 <title>{displayName} ({displayType})</title>
-                <rect width={itemWidth} height={itemHeight} rx={5} fill={color} stroke="#333" strokeWidth={1} />
+                <rect width={itemWidth} height={itemHeight} rx={5} fill={color} stroke="var(--pf-global--BorderColor--100)" strokeWidth={1} />
                 <foreignObject x={10} y={10} width={20} height={20}>
                     <div style={{ color: '#fff' }}>{Icon}</div>
                 </foreignObject>
@@ -167,12 +215,7 @@ const NodeVisualization: React.FC<NodeVisualizationProps> = ({ nns, cudns = [], 
         <Card isFullHeight>
             <CardTitle>Network Topology Visualization</CardTitle>
             <CardBody>
-                <svg width="100%" height={calculatedHeight} viewBox={`0 0 ${width} ${calculatedHeight}`} style={{ border: '1px solid #ccc', background: '#f5f5f5' }}>
-                    <defs>
-                        <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="0" refY="3.5" orient="auto">
-                            <polygon points="0 0, 10 3.5, 0 7" fill="#999" />
-                        </marker>
-                    </defs>
+                <svg width="100%" height={calculatedHeight} viewBox={`0 0 ${width} ${calculatedHeight}`} style={{ border: '1px solid var(--pf-global--BorderColor--100)', background: 'var(--pf-global--BackgroundColor--200)', color: 'var(--pf-global--Color--100)' }}>
 
                     {/* Connectors */}
                     {interfaces.map((iface: any) => {
@@ -197,45 +240,59 @@ const NodeVisualization: React.FC<NodeVisualizationProps> = ({ nns, cudns = [], 
                         }
                         return null;
                     })}
+                    {attachmentNodes.map((node: any) => {
+                        // Connect Attachment to CUDN
+                        if (nodePositions[`cudn-${node.cudn}`]) {
+                            // Draw FROM Attachment TO CUDN
+                            return renderConnector(`attachment-${node.cudn}-${node.namespace}`, `cudn-${node.cudn}`);
+                        }
+                        return null;
+                    })}
 
                     {/* Layer 1: Physical Interfaces */}
-                    <text x={padding} y={padding - 10} fontWeight="bold">Physical Interfaces</text>
+                    <text x={padding} y={padding - 10} fontWeight="bold" fill="currentColor">Physical Interfaces</text>
                     {ethInterfaces.map((iface: any) =>
                         nodePositions[iface.name] && renderInterfaceNode(iface, nodePositions[iface.name].x, nodePositions[iface.name].y, '#0066CC')
                     )}
 
                     {/* Layer 2: Bonds */}
-                    <text x={padding + colSpacing} y={padding - 10} fontWeight="bold">Bonds</text>
+                    <text x={padding + colSpacing} y={padding - 10} fontWeight="bold" fill="currentColor">Bonds</text>
                     {bondInterfaces.map((iface: any) =>
                         nodePositions[iface.name] && renderInterfaceNode(iface, nodePositions[iface.name].x, nodePositions[iface.name].y, '#663399')
                     )}
 
                     {/* Layer 3: Bridges */}
-                    <text x={padding + (colSpacing * 2)} y={padding - 10} fontWeight="bold">Bridges</text>
+                    <text x={padding + (colSpacing * 2)} y={padding - 10} fontWeight="bold" fill="currentColor">Bridges</text>
                     {bridgeInterfaces.map((iface: any) =>
                         nodePositions[iface.name] && renderInterfaceNode(iface, nodePositions[iface.name].x, nodePositions[iface.name].y, '#FF6600')
                     )}
 
                     {/* Layer 4: Logical Interfaces */}
-                    <text x={padding + (colSpacing * 3)} y={padding - 10} fontWeight="bold">Logical Interfaces</text>
+                    <text x={padding + (colSpacing * 3)} y={padding - 10} fontWeight="bold" fill="currentColor">Logical Interfaces</text>
                     {logicalInterfaces.map((iface: any) =>
                         nodePositions[iface.name] && renderInterfaceNode(iface, nodePositions[iface.name].x, nodePositions[iface.name].y, '#0099CC')
                     )}
 
                     {/* Layer 5: OVN Mappings */}
-                    <text x={padding + (colSpacing * 4)} y={padding - 10} fontWeight="bold">OVN Bridge Mappings</text>
+                    <text x={padding + (colSpacing * 4)} y={padding - 10} fontWeight="bold" fill="currentColor">OVN Bridge Mappings</text>
                     {bridgeMappings.map((mapping: any) =>
                         nodePositions[`ovn-${mapping.localnet}`] && renderInterfaceNode(mapping, nodePositions[`ovn-${mapping.localnet}`].x, nodePositions[`ovn-${mapping.localnet}`].y, '#009900', 'ovn-mapping')
                     )}
 
                     {/* Layer 6: Networks (CUDNs) */}
-                    <text x={padding + (colSpacing * 5)} y={padding - 10} fontWeight="bold">Networks</text>
+                    <text x={padding + (colSpacing * 5)} y={padding - 10} fontWeight="bold" fill="currentColor">Networks</text>
                     {cudns.map((cudn: any) =>
                         nodePositions[`cudn-${cudn.metadata.name}`] && renderInterfaceNode(cudn, nodePositions[`cudn-${cudn.metadata.name}`].x, nodePositions[`cudn-${cudn.metadata.name}`].y, '#CC0099', 'cudn')
                     )}
 
-                    {/* Layer 7: Others */}
-                    <text x={padding} y={calculatedHeight - 150} fontWeight="bold">Other Interfaces</text>
+                    {/* Layer 7: Attachments (from CUDN status) */}
+                    <text x={padding + (colSpacing * 6)} y={padding - 10} fontWeight="bold" fill="currentColor">Attachments</text>
+                    {attachmentNodes.map((node: any) =>
+                        nodePositions[`attachment-${node.cudn}-${node.namespace}`] && renderInterfaceNode(node, nodePositions[`attachment-${node.cudn}-${node.namespace}`].x, nodePositions[`attachment-${node.cudn}-${node.namespace}`].y, 'var(--pf-global--palette--gold-400)', 'attachment')
+                    )}
+
+                    {/* Layer 8: Others */}
+                    <text x={padding} y={calculatedHeight - 150} fontWeight="bold" fill="currentColor">Other Interfaces</text>
                     <g transform={`translate(${padding}, ${calculatedHeight - 140})`}>
                         {otherInterfaces.map((iface: any, index: number) => {
                             const col = index % 4;
@@ -244,6 +301,45 @@ const NodeVisualization: React.FC<NodeVisualizationProps> = ({ nns, cudns = [], 
                         })}
                     </g>
                 </svg>
+
+                <Popover
+                    triggerRef={() => anchorElement}
+                    isVisible={!!activeNode}
+                    shouldClose={handlePopoverClose}
+                    headerContent={<div>{activeNode?.name || activeNode?.localnet || activeNode?.metadata?.name}</div>}
+                    bodyContent={
+                        <DescriptionList isCompact>
+                            <DescriptionListGroup>
+                                <DescriptionListTerm>Type</DescriptionListTerm>
+                                <DescriptionListDescription>{activeNode?.type || (activeNode?.localnet ? 'OVN Localnet' : 'CUDN')}</DescriptionListDescription>
+                            </DescriptionListGroup>
+                            <DescriptionListGroup>
+                                <DescriptionListTerm>State</DescriptionListTerm>
+                                <DescriptionListDescription>{activeNode?.state || activeNode?.spec?.network?.topology || 'N/A'}</DescriptionListDescription>
+                            </DescriptionListGroup>
+                            {activeNode?.mac_address && (
+                                <DescriptionListGroup>
+                                    <DescriptionListTerm>MAC Address</DescriptionListTerm>
+                                    <DescriptionListDescription>{activeNode.mac_address}</DescriptionListDescription>
+                                </DescriptionListGroup>
+                            )}
+                            {activeNode?.mtu && (
+                                <DescriptionListGroup>
+                                    <DescriptionListTerm>MTU</DescriptionListTerm>
+                                    <DescriptionListDescription>{activeNode.mtu}</DescriptionListDescription>
+                                </DescriptionListGroup>
+                            )}
+                            {activeNode?.ipv4?.address && activeNode.ipv4.address.length > 0 && (
+                                <DescriptionListGroup>
+                                    <DescriptionListTerm>IPv4</DescriptionListTerm>
+                                    <DescriptionListDescription>{activeNode.ipv4.address[0].ip}/{activeNode.ipv4.address[0].prefix_length}</DescriptionListDescription>
+                                </DescriptionListGroup>
+                            )}
+                        </DescriptionList>
+                    }
+                >
+                    <div style={{ display: 'none' }} />
+                </Popover>
             </CardBody>
         </Card>
     );
