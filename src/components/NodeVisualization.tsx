@@ -1,6 +1,6 @@
 import * as React from 'react';
-import { Card, CardBody, CardTitle, Popover, Button, DescriptionList, DescriptionListTerm, DescriptionListGroup, DescriptionListDescription } from '@patternfly/react-core';
-import { NetworkIcon, ServerIcon, TopologyIcon, CubeIcon, RouteIcon } from '@patternfly/react-icons';
+import { Card, CardBody, CardTitle, Popover, Button, DescriptionList, DescriptionListTerm, DescriptionListGroup, DescriptionListDescription, Switch } from '@patternfly/react-core';
+import { NetworkIcon, ServerIcon, TopologyIcon, CubeIcon, RouteIcon, InfrastructureIcon, LinuxIcon, ResourcePoolIcon, PficonVcenterIcon, MigrationIcon } from '@patternfly/react-icons';
 
 interface NodeVisualizationProps {
     nns: any; // NodeNetworkState resource
@@ -12,6 +12,9 @@ const NodeVisualization: React.FC<NodeVisualizationProps> = ({ nns, cudns = [], 
     const interfaces = nns?.status?.currentState?.interfaces || [];
     const ovn = nns?.status?.currentState?.ovn || {};
     const bridgeMappings = ovn['bridge-mappings'] || [];
+
+    // State for toggle
+    const [showHiddenColumns, setShowHiddenColumns] = React.useState<boolean>(false);
 
     // Simple layout logic
     const width = 1600; // Increased width for new columns
@@ -25,75 +28,120 @@ const NodeVisualization: React.FC<NodeVisualizationProps> = ({ nns, cudns = [], 
     const controllerNames = new Set(interfaces.map((iface: any) => iface.controller || iface.master).filter(Boolean));
 
     // Group interfaces
-    const ethInterfaces = interfaces.filter((iface: any) => iface.type === 'ethernet');
+    const ethInterfaces = interfaces.filter((iface: any) => iface.type === 'ethernet' && iface.state !== 'ignore');
     const bondInterfaces = interfaces.filter((iface: any) => iface.type === 'bond');
 
     const isBridge = (iface: any) => {
         if (['linux-bridge', 'ovs-bridge'].includes(iface.type)) return true;
         // ovs-interface is a bridge if it is a controller AND does NOT have a patch
-        if (iface.type === 'ovs-interface' && controllerNames.has(iface.name) && !iface.patch) return true;
+        if (iface.type === 'ovs-interface' && controllerNames.has(iface.name) && !iface.patch && iface.state !== 'ignore') return true;
         return false;
     };
 
     const bridgeInterfaces = interfaces.filter(isBridge);
 
-    // Logical interfaces: ovs-interface that are NOT bridges
-    const logicalInterfaces = interfaces.filter((iface: any) => iface.type === 'ovs-interface' && !isBridge(iface));
+    // Logical interfaces: ovs-interface that are NOT bridges and NOT ignored
+    const logicalInterfaces = interfaces.filter((iface: any) => iface.type === 'ovs-interface' && !isBridge(iface) && iface.state !== 'ignore' && !iface.name.startsWith('patch'));
 
     const otherInterfaces = interfaces.filter((iface: any) => !['ethernet', 'bond'].includes(iface.type) && !isBridge(iface) && iface.type !== 'ovs-interface');
 
-    // Calculate positions
+    // Calculate positions with dynamic column visibility
     const nodePositions: { [name: string]: { x: number, y: number } } = {};
 
-    ethInterfaces.forEach((iface: any, index: number) => {
-        nodePositions[iface.name] = { x: padding, y: padding + (index * (itemHeight + 20)) };
-    });
+    // Define columns with their data
+    const columns = [
+        { name: 'Physical Interfaces', data: ethInterfaces, key: 'eth' },
+        { name: 'Bonds', data: bondInterfaces, key: 'bond' },
+        { name: 'Bridges', data: bridgeInterfaces, key: 'bridge' },
+        { name: 'Logical Interfaces', data: logicalInterfaces, key: 'logical' },
+        { name: 'Bridge Mappings', data: bridgeMappings, key: 'ovn' },
+        { name: 'Networks', data: cudns, key: 'cudn' },
+    ];
 
-    bondInterfaces.forEach((iface: any, index: number) => {
-        nodePositions[iface.name] = { x: padding + colSpacing, y: padding + (index * (itemHeight + 20)) };
-    });
+    // Filter columns based on showHiddenColumns
+    const visibleColumns = showHiddenColumns ? columns : columns.filter(col => col.data.length > 0);
 
-    bridgeInterfaces.forEach((iface: any, index: number) => {
-        nodePositions[iface.name] = { x: padding + (colSpacing * 2), y: padding + (index * (itemHeight + 20)) };
-    });
+    // Position nodes based on visible columns
+    let currentColIndex = 0;
 
-    logicalInterfaces.forEach((iface: any, index: number) => {
-        nodePositions[iface.name] = { x: padding + (colSpacing * 3), y: padding + (index * (itemHeight + 20)) };
-    });
+    if (showHiddenColumns || ethInterfaces.length > 0) {
+        ethInterfaces.forEach((iface: any, index: number) => {
+            const colOffset = visibleColumns.findIndex(col => col.key === 'eth');
+            nodePositions[iface.name] = { x: padding + (colOffset * colSpacing), y: padding + (index * (itemHeight + 20)) };
+        });
+    }
 
-    // OVN Mappings positions
-    bridgeMappings.forEach((mapping: any, index: number) => {
-        nodePositions[`ovn-${mapping.localnet}`] = { x: padding + (colSpacing * 4), y: padding + (index * (itemHeight + 20)) };
-    });
+    if (showHiddenColumns || bondInterfaces.length > 0) {
+        bondInterfaces.forEach((iface: any, index: number) => {
+            const colOffset = visibleColumns.findIndex(col => col.key === 'bond');
+            nodePositions[iface.name] = { x: padding + (colOffset * colSpacing), y: padding + (index * (itemHeight + 20)) };
+        });
+    }
 
-    // Networks (CUDNs) positions
-    cudns.forEach((cudn: any, index: number) => {
-        nodePositions[`cudn-${cudn.metadata.name}`] = { x: padding + (colSpacing * 5), y: padding + (index * (itemHeight + 20)) };
-    });
+    if (showHiddenColumns || bridgeInterfaces.length > 0) {
+        bridgeInterfaces.forEach((iface: any, index: number) => {
+            const colOffset = visibleColumns.findIndex(col => col.key === 'bridge');
+            nodePositions[iface.name] = { x: padding + (colOffset * colSpacing), y: padding + (index * (itemHeight + 20)) };
+        });
+    }
 
-    // Attachments (from CUDN status)
+    if (showHiddenColumns || logicalInterfaces.length > 0) {
+        logicalInterfaces.forEach((iface: any, index: number) => {
+            const colOffset = visibleColumns.findIndex(col => col.key === 'logical');
+            nodePositions[iface.name] = { x: padding + (colOffset * colSpacing), y: padding + (index * (itemHeight + 20)) };
+        });
+    }
+
+    if (showHiddenColumns || bridgeMappings.length > 0) {
+        bridgeMappings.forEach((mapping: any, index: number) => {
+            const colOffset = visibleColumns.findIndex(col => col.key === 'ovn');
+            nodePositions[`ovn-${mapping.localnet}`] = { x: padding + (colOffset * colSpacing), y: padding + (index * (itemHeight + 20)) };
+        });
+    }
+
+    if (showHiddenColumns || cudns.length > 0) {
+        cudns.forEach((cudn: any, index: number) => {
+            const colOffset = visibleColumns.findIndex(col => col.key === 'cudn');
+            nodePositions[`cudn-${cudn.metadata.name}`] = { x: padding + (colOffset * colSpacing), y: padding + (index * (itemHeight + 20)) };
+        });
+    }
+
+    // Attachments (from CUDN status) - AGGREGATED
     const attachmentNodes: any[] = [];
     cudns.forEach((cudn: any) => {
         const condition = cudn.status?.conditions?.find((c: any) => c.type === 'NetworkCreated' && c.status === 'True');
         if (condition && condition.message) {
             const match = condition.message.match(/\[(.*?)\]/);
             if (match && match[1]) {
-                const namespaces = match[1].split(',').map((ns: string) => ns.trim());
-                namespaces.forEach((ns: string) => {
+                const namespaces = match[1].split(',').map((ns: string) => ns.trim()).sort();
+                if (namespaces.length > 0) {
                     attachmentNodes.push({
-                        name: ns,
+                        name: cudn.metadata.name, // Name same as CUDN
                         type: 'attachment',
-                        namespace: ns,
+                        namespaces: namespaces, // List of namespaces
                         cudn: cudn.metadata.name
                     });
-                });
+                }
             }
         }
     });
 
-    // Attachments positions
-    attachmentNodes.forEach((node: any, index: number) => {
-        nodePositions[`attachment-${node.cudn}-${node.namespace}`] = { x: padding + (colSpacing * 6), y: padding + (index * (itemHeight + 20)) };
+    // Helper to calculate attachment node height
+    const getAttachmentHeight = (node: any) => {
+        const nsString = node.namespaces.join(', ');
+        const charsPerLine = 25; // Approximate characters per line
+        const lines = Math.ceil(nsString.length / charsPerLine);
+        // Base height (60px for icon/title) + text height (approx 12px per line) + padding
+        return Math.max(itemHeight, 60 + (lines * 12) + 10);
+    };
+
+    // Attachments positions with dynamic spacing
+    let currentAttachmentY = padding;
+    const attachmentColOffset = visibleColumns.length; // Attachments always after visible columns
+    attachmentNodes.forEach((node: any) => {
+        const height = getAttachmentHeight(node);
+        nodePositions[`attachment-${node.cudn}`] = { x: padding + (attachmentColOffset * colSpacing), y: currentAttachmentY };
+        currentAttachmentY += height + 20; // Add gap
     });
 
     // Dynamic height calculation
@@ -104,21 +152,21 @@ const NodeVisualization: React.FC<NodeVisualizationProps> = ({ nns, cudns = [], 
         logicalInterfaces.length,
         bridgeMappings.length,
         cudns.length,
-        attachmentNodes.length,
         Math.ceil(otherInterfaces.length / 4) + 2
     );
-    const calculatedHeight = Math.max(600, padding + (maxRows * (itemHeight + 20)) + 200);
+    // Use currentAttachmentY for attachment column height
+    const calculatedHeight = Math.max(600, padding + (maxRows * (itemHeight + 20)) + 200, currentAttachmentY + 100);
 
     const getIcon = (type: string) => {
         switch (type) {
-            case 'ethernet': return <ServerIcon />;
-            case 'bond': return <TopologyIcon />;
-            case 'linux-bridge':
-            case 'ovs-bridge': return <CubeIcon />;
+            case 'ethernet': return <ResourcePoolIcon />;
+            case 'bond': return <PficonVcenterIcon />;
+            case 'linux-bridge': return <LinuxIcon />;
+            case 'ovs-bridge': return <InfrastructureIcon />;
             case 'ovs-interface': return <NetworkIcon />; // Logical
             case 'ovn-mapping': return <RouteIcon />;
             case 'cudn': return <NetworkIcon />;
-            case 'attachment': return <NetworkIcon />;
+            case 'attachment': return <MigrationIcon />;
             default: return <NetworkIcon />;
         }
     };
@@ -158,12 +206,14 @@ const NodeVisualization: React.FC<NodeVisualizationProps> = ({ nns, cudns = [], 
         setAnchorElement(null);
     };
 
-    const renderInterfaceNode = (iface: any, x: number, y: number, color: string, typeOverride?: string) => {
+    const renderInterfaceNode = (iface: any, x: number, y: number, color: string, typeOverride?: string, heightOverride?: number) => {
         const type = typeOverride || iface.type;
         const Icon = getIcon(type);
         let displayName = iface.name;
         let displayType = type;
         let displayState = iface.state;
+        let extraInfo = null;
+        const nodeHeight = heightOverride || itemHeight;
 
         if (type === 'ovn-mapping') {
             displayName = iface.localnet;
@@ -173,10 +223,24 @@ const NodeVisualization: React.FC<NodeVisualizationProps> = ({ nns, cudns = [], 
             displayName = iface.metadata.name;
             displayType = 'CUDN';
             displayState = iface.spec?.network?.topology || 'Unknown';
+            // Add VLAN ID if localnet
+            if (iface.spec?.network?.topology === 'Localnet') {
+                const vlan = iface.spec?.network?.localnet?.vlan?.access?.id;
+                if (vlan) {
+                    displayState += ` VLAN ${vlan}`;
+                }
+            }
         } else if (type === 'attachment') {
-            displayName = iface.namespace;
-            displayType = 'Namespace';
-            displayState = 'Attached';
+            displayName = iface.name; // Name same as CUDN
+            displayType = 'NAD'; // Changed from 'Attachments'
+            displayState = 'Namespaces:'; // We will render namespaces below
+            extraInfo = (
+                <foreignObject x={10} y={60} width={itemWidth - 20} height={nodeHeight - 70}>
+                    <div style={{ fontSize: '10px', color: '#eee', wordWrap: 'break-word', lineHeight: '1.2' }}>
+                        {iface.namespaces.join(', ')}
+                    </div>
+                </foreignObject>
+            );
         }
 
         return (
@@ -186,14 +250,15 @@ const NodeVisualization: React.FC<NodeVisualizationProps> = ({ nns, cudns = [], 
                 onClick={(e) => handleNodeClick(e, iface)}
             >
                 <title>{displayName} ({displayType})</title>
-                <rect width={itemWidth} height={itemHeight} rx={5} fill={color} stroke="var(--pf-global--BorderColor--100)" strokeWidth={1} />
+                <rect width={itemWidth} height={nodeHeight} rx={5} fill={color} stroke="var(--pf-global--BorderColor--100)" strokeWidth={1} />
                 <foreignObject x={10} y={10} width={20} height={20}>
                     <div style={{ color: '#fff' }}>{Icon}</div>
                 </foreignObject>
                 <text x={35} y={25} fontSize="12" fontWeight="bold" fill="#fff">{displayName}</text>
                 <text x={10} y={45} fontSize="10" fill="#eee">{displayType}</text>
-                <text x={10} y={60} fontSize="10" fill="#eee">{displayState}</text>
-                {type !== 'ovn-mapping' && type !== 'cudn' && (
+                {type !== 'attachment' && <text x={10} y={60} fontSize="10" fill="#eee">{displayState}</text>}
+                {extraInfo}
+                {type !== 'ovn-mapping' && type !== 'cudn' && type !== 'attachment' && (
                     <circle cx={itemWidth - 15} cy={15} r={5} fill={iface.state === 'up' ? '#4CAF50' : '#F44336'} />
                 )}
             </g>
@@ -215,6 +280,14 @@ const NodeVisualization: React.FC<NodeVisualizationProps> = ({ nns, cudns = [], 
         <Card isFullHeight>
             <CardTitle>Network Topology Visualization</CardTitle>
             <CardBody>
+                <div style={{ marginBottom: '16px' }}>
+                    <Switch
+                        id="show-hidden-columns-toggle"
+                        label="Show hidden columns"
+                        isChecked={showHiddenColumns}
+                        onChange={(event, checked) => setShowHiddenColumns(checked)}
+                    />
+                </div>
                 <svg width="100%" height={calculatedHeight} viewBox={`0 0 ${width} ${calculatedHeight}`} style={{ border: '1px solid var(--pf-global--BorderColor--100)', background: 'var(--pf-global--BackgroundColor--200)', color: 'var(--pf-global--Color--100)' }}>
 
                     {/* Connectors */}
@@ -244,51 +317,43 @@ const NodeVisualization: React.FC<NodeVisualizationProps> = ({ nns, cudns = [], 
                         // Connect Attachment to CUDN
                         if (nodePositions[`cudn-${node.cudn}`]) {
                             // Draw FROM Attachment TO CUDN
-                            return renderConnector(`attachment-${node.cudn}-${node.namespace}`, `cudn-${node.cudn}`);
+                            return renderConnector(`attachment-${node.cudn}`, `cudn-${node.cudn}`);
                         }
                         return null;
                     })}
 
-                    {/* Layer 1: Physical Interfaces */}
-                    <text x={padding} y={padding - 10} fontWeight="bold" fill="currentColor">Physical Interfaces</text>
-                    {ethInterfaces.map((iface: any) =>
-                        nodePositions[iface.name] && renderInterfaceNode(iface, nodePositions[iface.name].x, nodePositions[iface.name].y, '#0066CC')
-                    )}
-
-                    {/* Layer 2: Bonds */}
-                    <text x={padding + colSpacing} y={padding - 10} fontWeight="bold" fill="currentColor">Bonds</text>
-                    {bondInterfaces.map((iface: any) =>
-                        nodePositions[iface.name] && renderInterfaceNode(iface, nodePositions[iface.name].x, nodePositions[iface.name].y, '#663399')
-                    )}
-
-                    {/* Layer 3: Bridges */}
-                    <text x={padding + (colSpacing * 2)} y={padding - 10} fontWeight="bold" fill="currentColor">Bridges</text>
-                    {bridgeInterfaces.map((iface: any) =>
-                        nodePositions[iface.name] && renderInterfaceNode(iface, nodePositions[iface.name].x, nodePositions[iface.name].y, '#FF6600')
-                    )}
-
-                    {/* Layer 4: Logical Interfaces */}
-                    <text x={padding + (colSpacing * 3)} y={padding - 10} fontWeight="bold" fill="currentColor">Logical Interfaces</text>
-                    {logicalInterfaces.map((iface: any) =>
-                        nodePositions[iface.name] && renderInterfaceNode(iface, nodePositions[iface.name].x, nodePositions[iface.name].y, '#0099CC')
-                    )}
-
-                    {/* Layer 5: OVN Mappings */}
-                    <text x={padding + (colSpacing * 4)} y={padding - 10} fontWeight="bold" fill="currentColor">OVN Bridge Mappings</text>
-                    {bridgeMappings.map((mapping: any) =>
-                        nodePositions[`ovn-${mapping.localnet}`] && renderInterfaceNode(mapping, nodePositions[`ovn-${mapping.localnet}`].x, nodePositions[`ovn-${mapping.localnet}`].y, '#009900', 'ovn-mapping')
-                    )}
-
-                    {/* Layer 6: Networks (CUDNs) */}
-                    <text x={padding + (colSpacing * 5)} y={padding - 10} fontWeight="bold" fill="currentColor">Networks</text>
-                    {cudns.map((cudn: any) =>
-                        nodePositions[`cudn-${cudn.metadata.name}`] && renderInterfaceNode(cudn, nodePositions[`cudn-${cudn.metadata.name}`].x, nodePositions[`cudn-${cudn.metadata.name}`].y, '#CC0099', 'cudn')
-                    )}
+                    {/* Render visible columns dynamically */}
+                    {visibleColumns.map((col, idx) => {
+                        const xPos = padding + (idx * colSpacing);
+                        return (
+                            <React.Fragment key={col.key}>
+                                <text x={xPos} y={padding - 10} fontWeight="bold" fill="currentColor">{col.name}</text>
+                                {col.key === 'eth' && ethInterfaces.map((iface: any) =>
+                                    nodePositions[iface.name] && renderInterfaceNode(iface, nodePositions[iface.name].x, nodePositions[iface.name].y, '#0066CC')
+                                )}
+                                {col.key === 'bond' && bondInterfaces.map((iface: any) =>
+                                    nodePositions[iface.name] && renderInterfaceNode(iface, nodePositions[iface.name].x, nodePositions[iface.name].y, '#663399')
+                                )}
+                                {col.key === 'bridge' && bridgeInterfaces.map((iface: any) =>
+                                    nodePositions[iface.name] && renderInterfaceNode(iface, nodePositions[iface.name].x, nodePositions[iface.name].y, '#FF6600')
+                                )}
+                                {col.key === 'logical' && logicalInterfaces.map((iface: any) =>
+                                    nodePositions[iface.name] && renderInterfaceNode(iface, nodePositions[iface.name].x, nodePositions[iface.name].y, '#0099CC')
+                                )}
+                                {col.key === 'ovn' && bridgeMappings.map((mapping: any) =>
+                                    nodePositions[`ovn-${mapping.localnet}`] && renderInterfaceNode(mapping, nodePositions[`ovn-${mapping.localnet}`].x, nodePositions[`ovn-${mapping.localnet}`].y, '#009900', 'ovn-mapping')
+                                )}
+                                {col.key === 'cudn' && cudns.map((cudn: any) =>
+                                    nodePositions[`cudn-${cudn.metadata.name}`] && renderInterfaceNode(cudn, nodePositions[`cudn-${cudn.metadata.name}`].x, nodePositions[`cudn-${cudn.metadata.name}`].y, '#CC0099', 'cudn')
+                                )}
+                            </React.Fragment>
+                        );
+                    })}
 
                     {/* Layer 7: Attachments (from CUDN status) */}
-                    <text x={padding + (colSpacing * 6)} y={padding - 10} fontWeight="bold" fill="currentColor">Attachments</text>
+                    <text x={padding + (attachmentColOffset * colSpacing)} y={padding - 10} fontWeight="bold" fill="currentColor">Attachments</text>
                     {attachmentNodes.map((node: any) =>
-                        nodePositions[`attachment-${node.cudn}-${node.namespace}`] && renderInterfaceNode(node, nodePositions[`attachment-${node.cudn}-${node.namespace}`].x, nodePositions[`attachment-${node.cudn}-${node.namespace}`].y, 'var(--pf-global--palette--gold-400)', 'attachment')
+                        nodePositions[`attachment-${node.cudn}`] && renderInterfaceNode(node, nodePositions[`attachment-${node.cudn}`].x, nodePositions[`attachment-${node.cudn}`].y, 'var(--pf-global--palette--gold-400)', 'attachment', getAttachmentHeight(node))
                     )}
 
                     {/* Layer 8: Others */}
@@ -333,6 +398,12 @@ const NodeVisualization: React.FC<NodeVisualizationProps> = ({ nns, cudns = [], 
                                 <DescriptionListGroup>
                                     <DescriptionListTerm>IPv4</DescriptionListTerm>
                                     <DescriptionListDescription>{activeNode.ipv4.address[0].ip}/{activeNode.ipv4.address[0].prefix_length}</DescriptionListDescription>
+                                </DescriptionListGroup>
+                            )}
+                            {activeNode?.namespaces && (
+                                <DescriptionListGroup>
+                                    <DescriptionListTerm>Namespaces</DescriptionListTerm>
+                                    <DescriptionListDescription>{activeNode.namespaces.join(', ')}</DescriptionListDescription>
                                 </DescriptionListGroup>
                             )}
                         </DescriptionList>
