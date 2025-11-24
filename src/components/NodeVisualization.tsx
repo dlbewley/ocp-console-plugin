@@ -4,31 +4,82 @@ import { NetworkIcon, ServerIcon, TopologyIcon, CubeIcon } from '@patternfly/rea
 
 interface NodeVisualizationProps {
     nns: any; // NodeNetworkState resource
+    cudns?: any[]; // ClusterUserDefinedNetwork resources
+    nads?: any[]; // NetworkAttachmentDefinition resources
 }
 
-const NodeVisualization: React.FC<NodeVisualizationProps> = ({ nns }) => {
+const NodeVisualization: React.FC<NodeVisualizationProps> = ({ nns, cudns = [], nads = [] }) => {
     const interfaces = nns?.status?.currentState?.interfaces || [];
+    const ovn = nns?.status?.currentState?.ovn || {};
+    const bridgeMappings = ovn['bridge-mappings'] || [];
 
     // Simple layout logic
-    const width = 800;
-    const height = 600;
+    const width = 1400; // Increased width for new columns
+    const height = 800;
     const padding = 50;
-    const itemHeight = 80; // Increased height for icon
+    const itemHeight = 80;
     const itemWidth = 160;
+    const colSpacing = 220;
 
-    // Group interfaces by type for better visualization
+    // Identify controllers
+    const controllerNames = new Set(interfaces.map((iface: any) => iface.controller || iface.master).filter(Boolean));
+
+    // Group interfaces
     const ethInterfaces = interfaces.filter((iface: any) => iface.type === 'ethernet');
     const bondInterfaces = interfaces.filter((iface: any) => iface.type === 'bond');
-    // Include ovs-interface with bridges for now as they are related to OVS
-    const bridgeInterfaces = interfaces.filter((iface: any) => ['linux-bridge', 'ovs-bridge', 'ovs-interface'].includes(iface.type));
-    const otherInterfaces = interfaces.filter((iface: any) => !['ethernet', 'bond', 'linux-bridge', 'ovs-bridge', 'ovs-interface'].includes(iface.type));
+
+    const isBridge = (iface: any) => {
+        if (['linux-bridge', 'ovs-bridge'].includes(iface.type)) return true;
+        // ovs-interface is a bridge if it is a controller AND does NOT have a patch
+        if (iface.type === 'ovs-interface' && controllerNames.has(iface.name) && !iface.patch) return true;
+        return false;
+    };
+
+    const bridgeInterfaces = interfaces.filter(isBridge);
+
+    // Logical interfaces: ovs-interface that are NOT bridges
+    const logicalInterfaces = interfaces.filter((iface: any) => iface.type === 'ovs-interface' && !isBridge(iface));
+
+    const otherInterfaces = interfaces.filter((iface: any) => !['ethernet', 'bond'].includes(iface.type) && !isBridge(iface) && iface.type !== 'ovs-interface');
+
+    // Calculate positions
+    const nodePositions: { [name: string]: { x: number, y: number } } = {};
+
+    ethInterfaces.forEach((iface: any, index: number) => {
+        nodePositions[iface.name] = { x: padding, y: padding + (index * (itemHeight + 20)) };
+    });
+
+    bondInterfaces.forEach((iface: any, index: number) => {
+        nodePositions[iface.name] = { x: padding + colSpacing, y: padding + (index * (itemHeight + 20)) };
+    });
+
+    bridgeInterfaces.forEach((iface: any, index: number) => {
+        nodePositions[iface.name] = { x: padding + (colSpacing * 2), y: padding + (index * (itemHeight + 20)) };
+    });
+
+    logicalInterfaces.forEach((iface: any, index: number) => {
+        nodePositions[iface.name] = { x: padding + (colSpacing * 3), y: padding + (index * (itemHeight + 20)) };
+    });
+
+    // OVN Mappings positions
+    bridgeMappings.forEach((mapping: any, index: number) => {
+        nodePositions[`ovn-${mapping.localnet}`] = { x: padding + (colSpacing * 4), y: padding + (index * (itemHeight + 20)) };
+    });
+
+    // Networks (CUDNs) positions
+    cudns.forEach((cudn: any, index: number) => {
+        nodePositions[`cudn-${cudn.metadata.name}`] = { x: padding + (colSpacing * 5), y: padding + (index * (itemHeight + 20)) };
+    });
 
     // Dynamic height calculation
     const maxRows = Math.max(
         ethInterfaces.length,
         bondInterfaces.length,
         bridgeInterfaces.length,
-        Math.ceil(otherInterfaces.length / 4) + 2 // +2 for spacing
+        logicalInterfaces.length,
+        bridgeMappings.length,
+        cudns.length,
+        Math.ceil(otherInterfaces.length / 4) + 2
     );
     const calculatedHeight = Math.max(600, padding + (maxRows * (itemHeight + 20)) + 200);
 
@@ -37,55 +88,66 @@ const NodeVisualization: React.FC<NodeVisualizationProps> = ({ nns }) => {
             case 'ethernet': return <ServerIcon />;
             case 'bond': return <TopologyIcon />;
             case 'linux-bridge':
-            case 'ovs-bridge':
-            case 'ovs-interface': return <CubeIcon />;
+            case 'ovs-bridge': return <CubeIcon />;
+            case 'ovs-interface': return <NetworkIcon />; // Logical
+            case 'ovn-mapping': return <NetworkIcon />;
+            case 'cudn': return <NetworkIcon />;
             default: return <NetworkIcon />;
         }
     };
 
-    const renderInterfaceNode = (iface: any, x: number, y: number, color: string) => {
-        const Icon = getIcon(iface.type);
+    const renderConnector = (startNode: string, endNode: string) => {
+        const start = nodePositions[startNode];
+        const end = nodePositions[endNode];
 
-        const content = (
-            <DescriptionList isHorizontal>
-                <DescriptionListGroup>
-                    <DescriptionListTerm>Type</DescriptionListTerm>
-                    <DescriptionListDescription>{iface.type}</DescriptionListDescription>
-                </DescriptionListGroup>
-                <DescriptionListGroup>
-                    <DescriptionListTerm>State</DescriptionListTerm>
-                    <DescriptionListDescription>{iface.state}</DescriptionListDescription>
-                </DescriptionListGroup>
-                <DescriptionListGroup>
-                    <DescriptionListTerm>MAC Address</DescriptionListTerm>
-                    <DescriptionListDescription>{iface.mac_address || 'N/A'}</DescriptionListDescription>
-                </DescriptionListGroup>
-                <DescriptionListGroup>
-                    <DescriptionListTerm>MTU</DescriptionListTerm>
-                    <DescriptionListDescription>{iface.mtu || 'N/A'}</DescriptionListDescription>
-                </DescriptionListGroup>
-                {iface.ipv4?.address?.length > 0 && (
-                    <DescriptionListGroup>
-                        <DescriptionListTerm>IPv4</DescriptionListTerm>
-                        <DescriptionListDescription>
-                            {iface.ipv4.address.map((addr: any) => <div key={addr.ip}>{addr.ip}/{addr.prefix_length}</div>)}
-                        </DescriptionListDescription>
-                    </DescriptionListGroup>
-                )}
-            </DescriptionList>
+        if (!start || !end) return null;
+
+        const x1 = start.x + itemWidth;
+        const y1 = start.y + (itemHeight / 2);
+        const x2 = end.x;
+        const y2 = end.y + (itemHeight / 2);
+
+        return (
+            <line
+                key={`${startNode}-${endNode}`}
+                x1={x1} y1={y1} x2={x2} y2={y2}
+                stroke="#999"
+                strokeWidth="2"
+                markerEnd="url(#arrowhead)"
+            />
         );
+    };
+
+    const renderInterfaceNode = (iface: any, x: number, y: number, color: string, typeOverride?: string) => {
+        const type = typeOverride || iface.type;
+        const Icon = getIcon(type);
+        let displayName = iface.name;
+        let displayType = type;
+        let displayState = iface.state;
+
+        if (type === 'ovn-mapping') {
+            displayName = iface.localnet;
+            displayType = 'OVN Localnet';
+            displayState = `Bridge: ${iface.bridge}`;
+        } else if (type === 'cudn') {
+            displayName = iface.metadata.name;
+            displayType = 'CUDN';
+            displayState = iface.spec?.network?.topology || 'Unknown';
+        }
 
         return (
             <g transform={`translate(${x}, ${y})`} style={{ cursor: 'pointer' }}>
-                <title>{iface.name} ({iface.type})</title>
+                <title>{displayName} ({displayType})</title>
                 <rect width={itemWidth} height={itemHeight} rx={5} fill={color} stroke="#333" strokeWidth={1} />
                 <foreignObject x={10} y={10} width={20} height={20}>
                     <div style={{ color: '#fff' }}>{Icon}</div>
                 </foreignObject>
-                <text x={35} y={25} fontSize="12" fontWeight="bold" fill="#fff">{iface.name}</text>
-                <text x={10} y={45} fontSize="10" fill="#eee">{iface.type}</text>
-                <text x={10} y={60} fontSize="10" fill="#eee">({iface.state})</text>
-                <circle cx={itemWidth - 15} cy={15} r={5} fill={iface.state === 'up' ? '#4CAF50' : '#F44336'} />
+                <text x={35} y={25} fontSize="12" fontWeight="bold" fill="#fff">{displayName}</text>
+                <text x={10} y={45} fontSize="10" fill="#eee">{displayType}</text>
+                <text x={10} y={60} fontSize="10" fill="#eee">{displayState}</text>
+                {type !== 'ovn-mapping' && type !== 'cudn' && (
+                    <circle cx={itemWidth - 15} cy={15} r={5} fill={iface.state === 'up' ? '#4CAF50' : '#F44336'} />
+                )}
             </g>
         );
     };
@@ -112,25 +174,67 @@ const NodeVisualization: React.FC<NodeVisualizationProps> = ({ nns }) => {
                         </marker>
                     </defs>
 
-                    {/* Layer 1: Physical Interfaces (Ethernet) */}
+                    {/* Connectors */}
+                    {interfaces.map((iface: any) => {
+                        const master = iface.controller || iface.master;
+                        if (master && nodePositions[master]) {
+                            return renderConnector(iface.name, master);
+                        }
+                        return null;
+                    })}
+                    {bridgeMappings.map((mapping: any) => {
+                        if (mapping.bridge && nodePositions[mapping.bridge]) {
+                            return renderConnector(mapping.bridge, `ovn-${mapping.localnet}`);
+                        }
+                        return null;
+                    })}
+                    {cudns.map((cudn: any) => {
+                        // Connect CUDN to OVN Mapping
+                        const physicalNetworkName = cudn.spec?.network?.localNet?.physicalNetworkName || cudn.spec?.network?.localnet?.physicalNetworkName;
+                        if (physicalNetworkName && nodePositions[`ovn-${physicalNetworkName}`]) {
+                            // Draw FROM CUDN TO OVN Mapping
+                            return renderConnector(`cudn-${cudn.metadata.name}`, `ovn-${physicalNetworkName}`);
+                        }
+                        return null;
+                    })}
+
+                    {/* Layer 1: Physical Interfaces */}
                     <text x={padding} y={padding - 10} fontWeight="bold">Physical Interfaces</text>
-                    {ethInterfaces.map((iface: any, index: number) =>
-                        renderInterfaceNode(iface, padding, padding + (index * (itemHeight + 20)), '#0066CC')
+                    {ethInterfaces.map((iface: any) =>
+                        nodePositions[iface.name] && renderInterfaceNode(iface, nodePositions[iface.name].x, nodePositions[iface.name].y, '#0066CC')
                     )}
 
                     {/* Layer 2: Bonds */}
-                    <text x={padding + 250} y={padding - 10} fontWeight="bold">Bonds</text>
-                    {bondInterfaces.map((iface: any, index: number) =>
-                        renderInterfaceNode(iface, padding + 250, padding + (index * (itemHeight + 20)), '#663399')
+                    <text x={padding + colSpacing} y={padding - 10} fontWeight="bold">Bonds</text>
+                    {bondInterfaces.map((iface: any) =>
+                        nodePositions[iface.name] && renderInterfaceNode(iface, nodePositions[iface.name].x, nodePositions[iface.name].y, '#663399')
                     )}
 
                     {/* Layer 3: Bridges */}
-                    <text x={padding + 500} y={padding - 10} fontWeight="bold">Bridges (Linux & OVS)</text>
-                    {bridgeInterfaces.map((iface: any, index: number) =>
-                        renderInterfaceNode(iface, padding + 500, padding + (index * (itemHeight + 20)), '#FF6600')
+                    <text x={padding + (colSpacing * 2)} y={padding - 10} fontWeight="bold">Bridges</text>
+                    {bridgeInterfaces.map((iface: any) =>
+                        nodePositions[iface.name] && renderInterfaceNode(iface, nodePositions[iface.name].x, nodePositions[iface.name].y, '#FF6600')
                     )}
 
-                    {/* Layer 4: Others */}
+                    {/* Layer 4: Logical Interfaces */}
+                    <text x={padding + (colSpacing * 3)} y={padding - 10} fontWeight="bold">Logical Interfaces</text>
+                    {logicalInterfaces.map((iface: any) =>
+                        nodePositions[iface.name] && renderInterfaceNode(iface, nodePositions[iface.name].x, nodePositions[iface.name].y, '#0099CC')
+                    )}
+
+                    {/* Layer 5: OVN Mappings */}
+                    <text x={padding + (colSpacing * 4)} y={padding - 10} fontWeight="bold">OVN Bridge Mappings</text>
+                    {bridgeMappings.map((mapping: any) =>
+                        nodePositions[`ovn-${mapping.localnet}`] && renderInterfaceNode(mapping, nodePositions[`ovn-${mapping.localnet}`].x, nodePositions[`ovn-${mapping.localnet}`].y, '#009900', 'ovn-mapping')
+                    )}
+
+                    {/* Layer 6: Networks (CUDNs) */}
+                    <text x={padding + (colSpacing * 5)} y={padding - 10} fontWeight="bold">Networks</text>
+                    {cudns.map((cudn: any) =>
+                        nodePositions[`cudn-${cudn.metadata.name}`] && renderInterfaceNode(cudn, nodePositions[`cudn-${cudn.metadata.name}`].x, nodePositions[`cudn-${cudn.metadata.name}`].y, '#CC0099', 'cudn')
+                    )}
+
+                    {/* Layer 7: Others */}
                     <text x={padding} y={calculatedHeight - 150} fontWeight="bold">Other Interfaces</text>
                     <g transform={`translate(${padding}, ${calculatedHeight - 140})`}>
                         {otherInterfaces.map((iface: any, index: number) => {
