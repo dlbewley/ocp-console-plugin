@@ -1,5 +1,19 @@
 import * as React from 'react';
-import { Card, CardBody, CardTitle, Popover, Button, DescriptionList, DescriptionListTerm, DescriptionListGroup, DescriptionListDescription, Switch } from '@patternfly/react-core';
+import ReactFlow, {
+    Background,
+    Controls,
+    MiniMap,
+    useNodesState,
+    useEdgesState,
+    Position,
+    MarkerType,
+    Node,
+    Edge,
+    ConnectionLineType,
+} from 'reactflow';
+import 'reactflow/dist/style.css';
+import dagre from 'dagre';
+import { Card, CardBody, CardTitle, Button, EmptyState, Title, EmptyStateBody, Popover, DescriptionList, DescriptionListTerm, DescriptionListGroup, DescriptionListDescription } from '@patternfly/react-core';
 import { NetworkIcon, ServerIcon, TopologyIcon, CubeIcon, RouteIcon, InfrastructureIcon, LinuxIcon, ResourcePoolIcon, PficonVcenterIcon, MigrationIcon, TagIcon } from '@patternfly/react-icons';
 
 interface NodeVisualizationProps {
@@ -8,208 +22,171 @@ interface NodeVisualizationProps {
     nads?: any[]; // NetworkAttachmentDefinition resources
 }
 
-const NodeVisualization: React.FC<NodeVisualizationProps> = ({ nns, cudns = [], nads = [] }) => {
-    // Graph Types
-    interface GraphNode {
-        id: string;
-        upstream: string[];
-        downstream: string[];
-    }
+const nodeWidth = 180;
+const nodeHeight = 60;
 
-    interface Graph {
-        nodes: { [id: string]: GraphNode };
-    }
+const getLayoutedElements = (nodes: Node[], edges: Edge[], direction = 'LR') => {
+    const dagreGraph = new dagre.graphlib.Graph();
+    dagreGraph.setDefaultEdgeLabel(() => ({}));
+
+    const isHorizontal = direction === 'LR';
+    dagreGraph.setGraph({ rankdir: direction });
+
+    nodes.forEach((node) => {
+        dagreGraph.setNode(node.id, { width: nodeWidth, height: nodeHeight });
+    });
+
+    edges.forEach((edge) => {
+        dagreGraph.setEdge(edge.source, edge.target);
+    });
+
+    dagre.layout(dagreGraph);
+
+    nodes.forEach((node) => {
+        const nodeWithPosition = dagreGraph.node(node.id);
+        node.targetPosition = isHorizontal ? Position.Left : Position.Top;
+        node.sourcePosition = isHorizontal ? Position.Right : Position.Bottom;
+
+        // We are shifting the dagre node position (anchor=center center) to the top left
+        // so it matches the React Flow node anchor point (top left).
+        node.position = {
+            x: nodeWithPosition.x - nodeWidth / 2,
+            y: nodeWithPosition.y - nodeHeight / 2,
+        };
+
+        return node;
+    });
+
+    return { nodes, edges };
+};
+
+const NodeVisualization: React.FC<NodeVisualizationProps> = ({ nns, cudns = [], nads = [] }) => {
+    const [nodes, setNodes, onNodesChange] = useNodesState([]);
+    const [edges, setEdges, onEdgesChange] = useEdgesState([]);
+
+    // State for Popover and Interaction
+    const [activeNode, setActiveNode] = React.useState<any>(null);
+    const [anchorElement, setAnchorElement] = React.useState<any>(null);
+    const [highlightedPath, setHighlightedPath] = React.useState<Set<string>>(new Set());
+    const [isHighlightActive, setIsHighlightActive] = React.useState<boolean>(false);
 
     const interfaces = nns?.status?.currentState?.interfaces || [];
     const ovn = nns?.status?.currentState?.ovn || {};
     const bridgeMappings = ovn['bridge-mappings'] || [];
 
-    // State for toggle
-    const [showHiddenColumns, setShowHiddenColumns] = React.useState<boolean>(false);
+    React.useEffect(() => {
+        const initialNodes: Node[] = [];
+        const initialEdges: Edge[] = [];
 
-    // Simple layout logic
-    const width = 1600; // Increased width for new columns
-    const height = 800;
-    const padding = 50;
-    const itemHeight = 80;
-    const itemWidth = 160;
-    const colSpacing = 220;
+        // Helper to add node
+        const addNode = (id: string, label: string, type: string, data: any = {}) => {
+            let style = { border: '1px solid #777', padding: 10, borderRadius: 5, width: nodeWidth, background: '#fff' };
 
-    // Identify controllers
-    const controllerNames = new Set(interfaces.map((iface: any) => iface.controller || iface.master).filter(Boolean));
-
-    // Group interfaces
-    const ethInterfaces = interfaces.filter((iface: any) => iface.type === 'ethernet' && iface.state !== 'ignore');
-    const bondInterfaces = interfaces.filter((iface: any) => iface.type === 'bond');
-    const vlanInterfaces = interfaces.filter((iface: any) => iface.type === 'vlan' || iface.type === 'mac-vlan');
-
-    const isBridge = (iface: any) => {
-        if (['linux-bridge', 'ovs-bridge'].includes(iface.type)) return true;
-        // ovs-interface is a bridge if it is a controller AND does NOT have a patch
-        if (iface.type === 'ovs-interface' && controllerNames.has(iface.name) && !iface.patch && iface.state !== 'ignore') return true;
-        return false;
-    };
-
-    const bridgeInterfaces = interfaces.filter(isBridge);
-
-    // Logical interfaces: ovs-interface that are NOT bridges and NOT ignored
-    const logicalInterfaces = interfaces.filter((iface: any) => iface.type === 'ovs-interface' && !isBridge(iface) && iface.state !== 'ignore' && !iface.name.startsWith('patch'));
-
-    const otherInterfaces = interfaces.filter((iface: any) => !['ethernet', 'bond', 'vlan', 'mac-vlan'].includes(iface.type) && !isBridge(iface) && iface.type !== 'ovs-interface');
-
-    // Calculate positions with dynamic column visibility
-    const nodePositions: { [name: string]: { x: number, y: number } } = {};
-
-    // Define columns with their data
-    const columns = [
-        { name: 'Physical Interfaces', data: ethInterfaces, key: 'eth' },
-        { name: 'Bonds', data: bondInterfaces, key: 'bond' },
-        { name: 'VLAN Interfaces', data: vlanInterfaces, key: 'vlan' },
-        { name: 'Bridges', data: bridgeInterfaces, key: 'bridge' },
-        { name: 'Logical Interfaces', data: logicalInterfaces, key: 'logical' },
-        { name: 'Bridge Mappings', data: bridgeMappings, key: 'ovn' },
-        { name: 'Networks', data: cudns, key: 'cudn' },
-    ];
-
-    // Filter columns based on showHiddenColumns
-    const visibleColumns = showHiddenColumns ? columns : columns.filter(col => col.data.length > 0);
-
-    // Position nodes based on visible columns
-    let currentColIndex = 0;
-
-    if (showHiddenColumns || ethInterfaces.length > 0) {
-        ethInterfaces.forEach((iface: any, index: number) => {
-            const colOffset = visibleColumns.findIndex(col => col.key === 'eth');
-            nodePositions[iface.name] = { x: padding + (colOffset * colSpacing), y: padding + (index * (itemHeight + 20)) };
-        });
-    }
-
-    if (showHiddenColumns || bondInterfaces.length > 0) {
-        bondInterfaces.forEach((iface: any, index: number) => {
-            const colOffset = visibleColumns.findIndex(col => col.key === 'bond');
-            nodePositions[iface.name] = { x: padding + (colOffset * colSpacing), y: padding + (index * (itemHeight + 20)) };
-        });
-    }
-
-    if (showHiddenColumns || vlanInterfaces.length > 0) {
-        vlanInterfaces.forEach((iface: any, index: number) => {
-            const colOffset = visibleColumns.findIndex(col => col.key === 'vlan');
-            nodePositions[iface.name] = { x: padding + (colOffset * colSpacing), y: padding + (index * (itemHeight + 20)) };
-        });
-    }
-
-    if (showHiddenColumns || bridgeInterfaces.length > 0) {
-        bridgeInterfaces.forEach((iface: any, index: number) => {
-            const colOffset = visibleColumns.findIndex(col => col.key === 'bridge');
-            nodePositions[iface.name] = { x: padding + (colOffset * colSpacing), y: padding + (index * (itemHeight + 20)) };
-        });
-    }
-
-    if (showHiddenColumns || logicalInterfaces.length > 0) {
-        logicalInterfaces.forEach((iface: any, index: number) => {
-            const colOffset = visibleColumns.findIndex(col => col.key === 'logical');
-            nodePositions[iface.name] = { x: padding + (colOffset * colSpacing), y: padding + (index * (itemHeight + 20)) };
-        });
-    }
-
-    if (showHiddenColumns || bridgeMappings.length > 0) {
-        bridgeMappings.forEach((mapping: any, index: number) => {
-            const colOffset = visibleColumns.findIndex(col => col.key === 'ovn');
-            nodePositions[`ovn-${mapping.localnet}`] = { x: padding + (colOffset * colSpacing), y: padding + (index * (itemHeight + 20)) };
-        });
-    }
-
-    if (showHiddenColumns || cudns.length > 0) {
-        cudns.forEach((cudn: any, index: number) => {
-            const colOffset = visibleColumns.findIndex(col => col.key === 'cudn');
-            nodePositions[`cudn-${cudn.metadata.name}`] = { x: padding + (colOffset * colSpacing), y: padding + (index * (itemHeight + 20)) };
-        });
-    }
-
-    // Attachments (from CUDN status) - AGGREGATED
-    const attachmentNodes: any[] = [];
-    cudns.forEach((cudn: any) => {
-        const condition = cudn.status?.conditions?.find((c: any) => c.type === 'NetworkCreated' && c.status === 'True');
-        if (condition && condition.message) {
-            const match = condition.message.match(/\[(.*?)\]/);
-            if (match && match[1]) {
-                const namespaces = match[1].split(',').map((ns: string) => ns.trim()).sort();
-                if (namespaces.length > 0) {
-                    attachmentNodes.push({
-                        name: cudn.metadata.name, // Name same as CUDN
-                        type: 'attachment',
-                        namespaces: namespaces, // List of namespaces
-                        cudn: cudn.metadata.name
-                    });
-                }
+            // Custom styles based on type
+            switch (type) {
+                case 'ethernet': style.border = '2px solid #0066CC'; break;
+                case 'bond': style.border = '2px solid #663399'; break;
+                case 'vlan': style.border = '2px solid #9933CC'; break;
+                case 'bridge': style.border = '2px solid #FF6600'; break;
+                case 'logical': style.border = '2px solid #0099CC'; break;
+                case 'ovn-mapping': style.border = '2px solid #009900'; style.background = '#f0fff0'; break;
+                case 'cudn': style.border = '2px solid #CC0099'; style.background = '#fff0f5'; break;
+                case 'attachment': style.border = '2px solid #F0AB00'; style.background = '#fffff0'; break;
             }
-        }
-    });
 
-    // Helper to calculate attachment node height
-    const getAttachmentHeight = (node: any) => {
-        const nsString = node.namespaces.join(', ');
-        const charsPerLine = 25; // Approximate characters per line
-        const lines = Math.ceil(nsString.length / charsPerLine);
-        // Base height (60px for icon/title) + text height (approx 12px per line) + padding
-        return Math.max(itemHeight, 60 + (lines * 12) + 10);
-    };
-
-    // Build Graph
-    const graph = React.useMemo(() => {
-        const g: Graph = { nodes: {} };
-        const addNode = (id: string) => {
-            if (!g.nodes[id]) g.nodes[id] = { id, upstream: [], downstream: [] };
-        };
-        const addEdge = (source: string, target: string) => {
-            addNode(source);
-            addNode(target);
-            if (!g.nodes[source].downstream.includes(target)) g.nodes[source].downstream.push(target);
-            if (!g.nodes[target].upstream.includes(source)) g.nodes[target].upstream.push(source);
+            initialNodes.push({
+                id,
+                data: { label: label, ...data },
+                position: { x: 0, y: 0 }, // Position will be set by dagre
+                style,
+                type: 'default', // Using default type for now, can be custom
+            });
         };
 
-        // 1. Interfaces (Physical, Bond, VLAN, Bridge, Logical)
+        // Helper to add edge
+        const addEdge = (source: string, target: string, animated = false) => {
+            initialEdges.push({
+                id: `${source}-${target}`,
+                source,
+                target,
+                type: 'smoothstep',
+                animated,
+                markerEnd: {
+                    type: MarkerType.ArrowClosed,
+                },
+            });
+        };
+
+        // 1. Interfaces
         interfaces.forEach((iface: any) => {
-            addNode(iface.name);
+            let type = iface.type;
+            if (['linux-bridge', 'ovs-bridge'].includes(iface.type)) type = 'bridge';
+            else if (iface.type === 'ovs-interface') {
+                // Check if it's a bridge controller or logical
+                const isController = interfaces.some((i: any) => (i.controller === iface.name || i.master === iface.name));
+                if (isController && !iface.patch) type = 'bridge';
+                else type = 'logical';
+            }
+
+            addNode(iface.name, iface.name, type, { original: iface });
+
             // Upstream: master/controller
             const master = iface.controller || iface.master;
             if (master) addEdge(iface.name, master);
 
             // Upstream: base-iface (VLAN/MAC-VLAN)
             const baseIface = iface.vlan?.['base-iface'] || iface['mac-vlan']?.['base-iface'];
-            if (baseIface) addEdge(baseIface, iface.name); // Correct direction: Base -> VLAN
+            if (baseIface) addEdge(baseIface, iface.name);
         });
 
-        // 2. Bridge Mappings (Bridge -> OVN Localnet)
+        // 2. Bridge Mappings
         bridgeMappings.forEach((mapping: any) => {
             const ovnNodeId = `ovn-${mapping.localnet}`;
+            addNode(ovnNodeId, `OVN: ${mapping.localnet}`, 'ovn-mapping', { original: mapping });
             if (mapping.bridge) addEdge(mapping.bridge, ovnNodeId);
         });
 
-        // 3. CUDNs (OVN Localnet -> CUDN)
+        // 3. CUDNs
         cudns.forEach((cudn: any) => {
             const cudnNodeId = `cudn-${cudn.metadata.name}`;
+            addNode(cudnNodeId, cudn.metadata.name, 'cudn', { original: cudn });
+
             const physicalNetworkName = cudn.spec?.network?.localNet?.physicalNetworkName || cudn.spec?.network?.localnet?.physicalNetworkName;
             if (physicalNetworkName) {
                 const ovnNodeId = `ovn-${physicalNetworkName}`;
-                addEdge(ovnNodeId, cudnNodeId); // Flow: OVN -> CUDN
+                addEdge(ovnNodeId, cudnNodeId);
             }
         });
 
-        // 4. Attachments (CUDN -> Attachment)
-        attachmentNodes.forEach((node: any) => {
-            const attachmentNodeId = `attachment-${node.cudn}`;
-            const cudnNodeId = `cudn-${node.cudn}`;
-            addEdge(cudnNodeId, attachmentNodeId); // Flow: CUDN -> Attachment
+        // 4. Attachments
+        cudns.forEach((cudn: any) => {
+            const condition = cudn.status?.conditions?.find((c: any) => c.type === 'NetworkCreated' && c.status === 'True');
+            if (condition && condition.message) {
+                const match = condition.message.match(/\[(.*?)\]/);
+                if (match && match[1]) {
+                    const namespaces = match[1].split(',').map((ns: string) => ns.trim()).sort();
+                    if (namespaces.length > 0) {
+                        const attachmentNodeId = `attachment-${cudn.metadata.name}`;
+                        const label = `NS: ${namespaces.length > 3 ? `${namespaces.slice(0, 3).join(', ')}...` : namespaces.join(', ')}`;
+                        addNode(attachmentNodeId, label, 'attachment', { namespaces });
+                        addEdge(`cudn-${cudn.metadata.name}`, attachmentNodeId, true);
+                    }
+                }
+            }
         });
 
-        return g;
-    }, [interfaces, bridgeMappings, cudns, attachmentNodes]);
+        // Apply Layout
+        const { nodes: layoutedNodes, edges: layoutedEdges } = getLayoutedElements(
+            initialNodes,
+            initialEdges
+        );
 
-    // Path Traversal
-    const [highlightedPath, setHighlightedPath] = React.useState<Set<string>>(new Set());
-    const [isHighlightActive, setIsHighlightActive] = React.useState<boolean>(false);
+        setNodes(layoutedNodes);
+        setEdges(layoutedEdges);
 
+    }, [nns, cudns, bridgeMappings]);
+
+    // Path Traversal Helper
     const getFlowPath = (startNodeId: string) => {
         const path = new Set<string>();
         const visited = new Set<string>();
@@ -219,97 +196,28 @@ const NodeVisualization: React.FC<NodeVisualizationProps> = ({ nns, cudns = [], 
             visited.add(nodeId);
             path.add(nodeId);
 
-            const node = graph.nodes[nodeId];
-            if (!node) return;
+            // Find connected edges
+            const connectedEdges = edges.filter(edge =>
+                direction === 'upstream' ? edge.target === nodeId : edge.source === nodeId
+            );
 
-            const nextNodes = direction === 'upstream' ? node.upstream : node.downstream;
-            nextNodes.forEach(nextId => {
-                path.add(`${nodeId}-${nextId}`); // Add Edge ID (source-target)
-                path.add(`${nextId}-${nodeId}`); // Add Edge ID (reverse for safety)
-                traverse(nextId, direction);
+            connectedEdges.forEach(edge => {
+                path.add(edge.id);
+                const nextNodeId = direction === 'upstream' ? edge.source : edge.target;
+                traverse(nextNodeId, direction);
             });
         };
 
         traverse(startNodeId, 'upstream');
-        visited.clear(); // Reset visited for downstream traversal (allow overlap)
+        visited.clear();
         traverse(startNodeId, 'downstream');
 
         return path;
     };
 
-    // Attachments positions with dynamic spacing
-    let currentAttachmentY = padding;
-    const attachmentColOffset = visibleColumns.length; // Attachments always after visible columns
-    attachmentNodes.forEach((node: any) => {
-        const height = getAttachmentHeight(node);
-        nodePositions[`attachment-${node.cudn}`] = { x: padding + (attachmentColOffset * colSpacing), y: currentAttachmentY };
-        currentAttachmentY += height + 20; // Add gap
-    });
-
-    // Dynamic height calculation
-    const maxRows = Math.max(
-        ethInterfaces.length,
-        bondInterfaces.length,
-        bridgeInterfaces.length,
-        logicalInterfaces.length,
-        bridgeMappings.length,
-        cudns.length,
-        Math.ceil(otherInterfaces.length / 4) + 2
-    );
-    // Use currentAttachmentY for attachment column height
-    const calculatedHeight = Math.max(600, padding + (maxRows * (itemHeight + 20)) + 200, currentAttachmentY + 100);
-
-    const getIcon = (type: string) => {
-        switch (type) {
-            case 'ethernet': return <ResourcePoolIcon />;
-            case 'bond': return <PficonVcenterIcon />;
-            case 'linux-bridge': return <LinuxIcon />;
-            case 'ovs-bridge': return <InfrastructureIcon />;
-            case 'ovs-interface': return <NetworkIcon />; // Logical
-            case 'ovn-mapping': return <RouteIcon />;
-            case 'cudn': return <NetworkIcon />;
-            case 'attachment': return <MigrationIcon />;
-            case 'vlan': return <TagIcon />;
-            case 'mac-vlan': return <TagIcon />;
-            default: return <NetworkIcon />;
-        }
-    };
-
-    const renderConnector = (startNode: string, endNode: string) => {
-        const start = nodePositions[startNode];
-        const end = nodePositions[endNode];
-
-        if (!start || !end) return null;
-
-        const x1 = start.x + itemWidth;
-        const y1 = start.y + (itemHeight / 2);
-        const x2 = end.x;
-        const y2 = end.y + (itemHeight / 2);
-
-        return (
-            <line
-                key={`${startNode}-${endNode}`}
-                x1={x1} y1={y1} x2={x2} y2={y2}
-                stroke={isHighlightActive ? (highlightedPath.has(`${startNode}-${endNode}`) || highlightedPath.has(`${endNode}-${startNode}`) ? '#0066CC' : '#ccc') : 'currentColor'}
-                strokeWidth={isHighlightActive ? (highlightedPath.has(`${startNode}-${endNode}`) || highlightedPath.has(`${endNode}-${startNode}`) ? 4 : 1) : 2}
-                opacity={isHighlightActive ? (highlightedPath.has(`${startNode}-${endNode}`) || highlightedPath.has(`${endNode}-${startNode}`) ? 1 : 0.1) : 1}
-            />
-        );
-    };
-
-    // State for Popover
-    const [activeNode, setActiveNode] = React.useState<any>(null);
-    const [anchorElement, setAnchorElement] = React.useState<any>(null);
-
-    const handleNodeClick = (event: React.MouseEvent, iface: any, nodeId: string) => {
-        event.stopPropagation(); // Prevent clearing highlight when clicking a node
-        setAnchorElement(event.currentTarget);
-        setActiveNode(iface);
-
-        // Highlight Path
-        const path = getFlowPath(nodeId);
-        setHighlightedPath(path);
-        setIsHighlightActive(true);
+    const handlePopoverClose = () => {
+        setActiveNode(null);
+        setAnchorElement(null);
     };
 
     const handleBackgroundClick = () => {
@@ -318,188 +226,76 @@ const NodeVisualization: React.FC<NodeVisualizationProps> = ({ nns, cudns = [], 
         handlePopoverClose();
     };
 
-    const handlePopoverClose = () => {
-        setActiveNode(null);
-        setAnchorElement(null);
-    };
-
-    const renderInterfaceNode = (iface: any, x: number, y: number, color: string, typeOverride?: string, heightOverride?: number) => {
-        const type = typeOverride || iface.type;
-        const Icon = getIcon(type);
-        let displayName = iface.name;
-        let displayType = type;
-        let displayState = iface.state;
-        let extraInfo = null;
-        const nodeHeight = heightOverride || itemHeight;
-
-        if (type === 'ovn-mapping') {
-            displayName = iface.localnet;
-            displayType = 'OVN Localnet';
-            displayState = `Bridge: ${iface.bridge}`;
-        } else if (type === 'cudn') {
-            displayName = iface.metadata.name;
-            displayType = 'CUDN';
-            displayState = iface.spec?.network?.topology || 'Unknown';
-            // Add VLAN ID if localnet
-            if (iface.spec?.network?.topology === 'Localnet') {
-                const vlan = iface.spec?.network?.localnet?.vlan?.access?.id;
-                if (vlan) {
-                    displayState += ` VLAN ${vlan}`;
-                }
-            }
-        } else if (type === 'attachment') {
-            displayName = iface.name; // Name same as CUDN
-            displayType = 'NAD'; // Changed from 'Attachments'
-            displayState = 'Namespaces:'; // We will render namespaces below
-            extraInfo = (
-                <foreignObject x={10} y={60} width={itemWidth - 20} height={nodeHeight - 70}>
-                    <div style={{ fontSize: '10px', color: '#eee', wordWrap: 'break-word', lineHeight: '1.2' }}>
-                        {iface.namespaces.join(', ')}
-                    </div>
-                </foreignObject>
-            );
-        }
-
-        return (
-            <g
-                transform={`translate(${x}, ${y})`}
-                style={{ cursor: 'pointer', opacity: isHighlightActive ? (highlightedPath.has(displayName) || highlightedPath.has(`ovn-${iface.localnet}`) || highlightedPath.has(`cudn-${iface.metadata?.name}`) || highlightedPath.has(`attachment-${iface.cudn}`) ? 1 : 0.3) : 1 }}
-                onClick={(e) => {
-                    let nodeId = displayName;
-                    if (type === 'ovn-mapping') nodeId = `ovn-${iface.localnet}`;
-                    else if (type === 'cudn') nodeId = `cudn-${iface.metadata.name}`;
-                    else if (type === 'attachment') nodeId = `attachment-${iface.cudn}`;
-                    handleNodeClick(e, iface, nodeId);
-                }}
-            >
-                <title>{displayName} ({displayType})</title>
-                <rect width={itemWidth} height={nodeHeight} rx={5} fill={color} stroke="var(--pf-global--BorderColor--100)" strokeWidth={1} />
-                <foreignObject x={10} y={10} width={20} height={20}>
-                    <div style={{ color: '#fff' }}>{Icon}</div>
-                </foreignObject>
-                <text x={35} y={25} fontSize="12" fontWeight="bold" fill="#fff">{displayName}</text>
-                <text x={10} y={45} fontSize="10" fill="#eee">{displayType}</text>
-                {type !== 'attachment' && <text x={10} y={60} fontSize="10" fill="#eee">{displayState}</text>}
-                {extraInfo}
-                {type !== 'ovn-mapping' && type !== 'cudn' && type !== 'attachment' && (
-                    <circle cx={itemWidth - 15} cy={15} r={5} fill={iface.state === 'up' ? '#4CAF50' : '#F44336'} />
-                )}
-            </g>
-        );
-    };
-
     if (interfaces.length === 0) {
         return (
             <Card isFullHeight>
-                <CardTitle>Network Topology Visualization</CardTitle>
+                <CardTitle>Network Topology</CardTitle>
                 <CardBody>
-                    No interfaces found in NodeNetworkState status.
+                    <EmptyState>
+                        <div style={{ fontSize: '32px', marginBottom: '10px' }}>
+                            <TopologyIcon />
+                        </div>
+                        <Title headingLevel="h4" size="lg">
+                            No Network Interfaces Found
+                        </Title>
+                        <EmptyStateBody>
+                            The NodeNetworkState does not contain any interfaces to visualize.
+                        </EmptyStateBody>
+                    </EmptyState>
                 </CardBody>
             </Card>
         );
     }
 
     return (
-        <Card isFullHeight>
-            <CardTitle>Network Topology Visualization</CardTitle>
-            <CardBody>
-                <div style={{ marginBottom: '16px' }}>
-                    <Switch
-                        id="show-hidden-columns-toggle"
-                        label="Show hidden columns"
-                        isChecked={showHiddenColumns}
-                        onChange={(event, checked) => setShowHiddenColumns(checked)}
-                    />
-                </div>
-                <svg width="100%" height={calculatedHeight} viewBox={`0 0 ${width} ${calculatedHeight}`} style={{ border: '1px solid var(--pf-global--BorderColor--100)', background: 'var(--pf-global--BackgroundColor--200)', color: 'var(--pf-global--Color--100)' }} onClick={handleBackgroundClick}>
+        <Card isFullHeight style={{ height: '800px' }}>
+            <CardTitle>Network Topology (React Flow)</CardTitle>
+            <CardBody style={{ padding: 0, height: '100%' }}>
+                <ReactFlow
+                    nodes={nodes.map(node => ({
+                        ...node,
+                        style: {
+                            ...node.style,
+                            opacity: isHighlightActive ? (highlightedPath.has(node.id) ? 1 : 0.3) : 1
+                        }
+                    }))}
+                    edges={edges.map(edge => ({
+                        ...edge,
+                        style: {
+                            ...edge.style,
+                            stroke: isHighlightActive ? (highlightedPath.has(edge.id) ? '#0066CC' : '#ccc') : '#b1b1b1',
+                            strokeWidth: isHighlightActive ? (highlightedPath.has(edge.id) ? 3 : 1) : 1,
+                            opacity: isHighlightActive ? (highlightedPath.has(edge.id) ? 1 : 0.1) : 1
+                        },
+                        animated: isHighlightActive && highlightedPath.has(edge.id)
+                    }))}
+                    onNodesChange={onNodesChange}
+                    onEdgesChange={onEdgesChange}
+                    onNodeClick={(event, node) => {
+                        // Extract original data for the popover
+                        const originalData = node.data.original || {
+                            name: node.data.label,
+                            type: node.type === 'attachment' ? 'attachment' : 'unknown',
+                            ...node.data
+                        };
 
-                    {/* Connectors */}
-                    {interfaces.map((iface: any) => {
-                        const master = iface.controller || iface.master;
-                        if (master && nodePositions[master]) {
-                            return renderConnector(iface.name, master);
-                        }
-                        return null;
-                    })}
-                    {/* VLAN and MAC-VLAN to base-iface connectors */}
-                    {vlanInterfaces.map((iface: any) => {
-                        const baseIface = iface.vlan?.['base-iface'] || iface['mac-vlan']?.['base-iface'];
-                        if (baseIface && nodePositions[baseIface]) {
-                            return renderConnector(baseIface, iface.name);
-                        }
-                        return null;
-                    })}
-                    {bridgeMappings.map((mapping: any) => {
-                        if (mapping.bridge && nodePositions[mapping.bridge]) {
-                            return renderConnector(mapping.bridge, `ovn-${mapping.localnet}`);
-                        }
-                        return null;
-                    })}
-                    {cudns.map((cudn: any) => {
-                        // Connect CUDN to OVN Mapping
-                        const physicalNetworkName = cudn.spec?.network?.localNet?.physicalNetworkName || cudn.spec?.network?.localnet?.physicalNetworkName;
-                        if (physicalNetworkName && nodePositions[`ovn-${physicalNetworkName}`]) {
-                            // Draw FROM OVN Mapping TO CUDN (Left to Right)
-                            return renderConnector(`ovn-${physicalNetworkName}`, `cudn-${cudn.metadata.name}`);
-                        }
-                        return null;
-                    })}
-                    {attachmentNodes.map((node: any) => {
-                        // Connect CUDN to Attachment (Left to Right)
-                        if (nodePositions[`cudn-${node.cudn}`]) {
-                            // Draw FROM CUDN TO Attachment
-                            return renderConnector(`cudn-${node.cudn}`, `attachment-${node.cudn}`);
-                        }
-                        return null;
-                    })}
+                        // Set anchor and active node
+                        setAnchorElement(event.currentTarget);
+                        setActiveNode(originalData);
 
-                    {/* Render visible columns dynamically */}
-                    {visibleColumns.map((col, idx) => {
-                        const xPos = padding + (idx * colSpacing);
-                        return (
-                            <React.Fragment key={col.key}>
-                                <text x={xPos} y={padding - 10} fontWeight="bold" fill="currentColor">{col.name}</text>
-                                {col.key === 'eth' && ethInterfaces.map((iface: any) =>
-                                    nodePositions[iface.name] && renderInterfaceNode(iface, nodePositions[iface.name].x, nodePositions[iface.name].y, '#0066CC')
-                                )}
-                                {col.key === 'bond' && bondInterfaces.map((iface: any) =>
-                                    nodePositions[iface.name] && renderInterfaceNode(iface, nodePositions[iface.name].x, nodePositions[iface.name].y, '#663399')
-                                )}
-                                {col.key === 'vlan' && vlanInterfaces.map((iface: any) =>
-                                    nodePositions[iface.name] && renderInterfaceNode(iface, nodePositions[iface.name].x, nodePositions[iface.name].y, '#9933CC')
-                                )}
-                                {col.key === 'bridge' && bridgeInterfaces.map((iface: any) =>
-                                    nodePositions[iface.name] && renderInterfaceNode(iface, nodePositions[iface.name].x, nodePositions[iface.name].y, '#FF6600')
-                                )}
-                                {col.key === 'logical' && logicalInterfaces.map((iface: any) =>
-                                    nodePositions[iface.name] && renderInterfaceNode(iface, nodePositions[iface.name].x, nodePositions[iface.name].y, '#0099CC')
-                                )}
-                                {col.key === 'ovn' && bridgeMappings.map((mapping: any) =>
-                                    nodePositions[`ovn-${mapping.localnet}`] && renderInterfaceNode(mapping, nodePositions[`ovn-${mapping.localnet}`].x, nodePositions[`ovn-${mapping.localnet}`].y, '#009900', 'ovn-mapping')
-                                )}
-                                {col.key === 'cudn' && cudns.map((cudn: any) =>
-                                    nodePositions[`cudn-${cudn.metadata.name}`] && renderInterfaceNode(cudn, nodePositions[`cudn-${cudn.metadata.name}`].x, nodePositions[`cudn-${cudn.metadata.name}`].y, '#CC0099', 'cudn')
-                                )}
-                            </React.Fragment>
-                        );
-                    })}
-
-                    {/* Layer 7: Attachments (from CUDN status) */}
-                    <text x={padding + (attachmentColOffset * colSpacing)} y={padding - 10} fontWeight="bold" fill="currentColor">Attachments</text>
-                    {attachmentNodes.map((node: any) =>
-                        nodePositions[`attachment-${node.cudn}`] && renderInterfaceNode(node, nodePositions[`attachment-${node.cudn}`].x, nodePositions[`attachment-${node.cudn}`].y, 'var(--pf-global--palette--gold-400)', 'attachment', getAttachmentHeight(node))
-                    )}
-
-                    {/* Layer 8: Others */}
-                    <text x={padding} y={calculatedHeight - 150} fontWeight="bold" fill="currentColor">Other Interfaces</text>
-                    <g transform={`translate(${padding}, ${calculatedHeight - 140})`}>
-                        {otherInterfaces.map((iface: any, index: number) => {
-                            const col = index % 4;
-                            const row = Math.floor(index / 4);
-                            return renderInterfaceNode(iface, col * (itemWidth + 20), row * (itemHeight + 20), '#666');
-                        })}
-                    </g>
-                </svg>
+                        // Highlight Path (using node.id)
+                        const path = getFlowPath(node.id);
+                        setHighlightedPath(path);
+                        setIsHighlightActive(true);
+                    }}
+                    onPaneClick={handleBackgroundClick}
+                    fitView
+                    attributionPosition="bottom-right"
+                >
+                    <MiniMap />
+                    <Controls />
+                    <Background color="#aaa" gap={16} />
+                </ReactFlow>
 
                 <Popover
                     triggerRef={() => anchorElement}
