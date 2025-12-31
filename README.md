@@ -162,7 +162,8 @@ If the plugin does not appear in the console:
 2.  **Verify Manifest Availability:**
     Check if the plugin manifest is being served correctly:
     ```bash
-    oc exec -n default deployment/$APP_NAME -- curl -k https://localhost:9443/plugin-manifest.json
+    oc exec -n $APP_NAMESPACE deployment/$APP_NAME -- \
+        curl -sk https://localhost:9443/plugin-manifest.json | jq
     ```
 
 3.  **Check ConsolePlugin Status:**
