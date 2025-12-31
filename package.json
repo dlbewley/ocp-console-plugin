@@ -21,9 +21,7 @@
         "exposedModules": {
             "ExamplePage": "./components/ExamplePage",
             "PodList": "./components/PodList",
-            "PodDetails": "./components/PodDetails",
-            "NodeNetworkStateList": "./components/NodeNetworkStateList",
-            "NodeNetworkStateDetails": "./components/NodeNetworkStateDetails"
+            "PodDetails": "./components/PodDetails"
         },
         "dependencies": {
             "@console/pluginAPI": "*"
@@ -36,9 +34,7 @@
         "react": "^17.0.1",
         "react-dom": "^17.0.1",
         "react-router-dom": "^5.3.0",
-        "react-helmet": "^6.1.0",
-        "react-i18next": "^11.8.11",
-        "i18next": "^20.6.1"
+        "react-helmet": "^6.1.0"
     },
     "devDependencies": {
         "@openshift-console/dynamic-plugin-sdk": "^1.0.0",

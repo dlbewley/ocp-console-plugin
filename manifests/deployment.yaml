@@ -14,8 +14,6 @@ spec:
       labels:
         app: ocp-console-plugin
     spec:
-      # imagePullSecrets:
-      #   - name: quay-pullsecret
       containers:
         - name: ocp-console-plugin
           image: quay.io/dbewley/ocp-console-plugin:latest

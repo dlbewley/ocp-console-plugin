@@ -2,9 +2,10 @@
 
 ![Built with AI](https://img.shields.io/badge/Built%20with-AI-blueviolet?style=for-the-badge)
 
-![nns visualization](img/nns-visualization.png)
 
 ## Repository
+
+<a href="img/console-ss.png"><img src="img/console-ss.png" align="right" width="200"/></a>
 
 The source code for this project is available at: [https://github.com/dlbewley/ocp-console-plugin](https://github.com/dlbewley/ocp-console-plugin)
 

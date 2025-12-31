@@ -53,33 +53,5 @@
             "name": "Pod List",
             "href": "/example/pod-list"
         }
-    },
-    {
-        "type": "console.page/route",
-        "properties": {
-            "path": "/example/node-network-state",
-            "component": {
-                "$codeRef": "NodeNetworkStateList"
-            }
-        }
-    },
-    {
-        "type": "console.page/route",
-        "properties": {
-            "path": "/example/node-network-state/:name",
-            "component": {
-                "$codeRef": "NodeNetworkStateDetails"
-            }
-        }
-    },
-    {
-        "type": "console.navigation/href",
-        "properties": {
-            "id": "node-network-state-nav",
-            "perspective": "admin",
-            "section": "example-section",
-            "name": "Node Network State",
-            "href": "/example/node-network-state"
-        }
     }
 ]
