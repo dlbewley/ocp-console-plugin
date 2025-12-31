@@ -1,15 +1,14 @@
 # OpenShift Console Plugin Walkthrough
 
+<a href="img/console-ss.png"><img src="img/console-ss.png" align="right" width="200"/></a>
 ![Built with AI](https://img.shields.io/badge/Built%20with-AI-blueviolet?style=for-the-badge)
+[![Image Repository on Quay](https://quay.io/repository/dbewley/ocp-console-plugin/status "Image Repository on Quay")](https://quay.io/repository/dbewley/ocp-console-plugin)
 
+A basic OpenShift "Hello World" console plugin example for learning how to build and deploy console plugins.
 
 ## Repository
 
-<a href="img/console-ss.png"><img src="img/console-ss.png" align="right" width="200"/></a>
-
 The source code for this project is available at: [https://github.com/dlbewley/ocp-console-plugin](https://github.com/dlbewley/ocp-console-plugin)
-
-I have created a basic OpenShift console plugin that adds a new page to the console UI.
 
 ## Project Structure
 
@@ -66,18 +65,51 @@ The build artifacts will be in the `dist` directory.
 
 ## How to Deploy
 
+0. **Create and sources a `setup_env.sh`.**
+
+    Example `setup_env.sh`:
+
+    ```bash
+    #!/bin/bash
+
+    # OpenShift Environment Setup Script
+    # Usage: source setup_env.sh
+
+    # Set the KUBECONFIG environment variable to the user's preferred path
+    export KUBECONFIG=$HOME/.kube/ocp/hub/kubeconfig
+    export APP_NAME=ocp-console-plugin
+    export APP_NAMESPACE=ocp-console-example
+
+    # Alias kubectl to oc for convenience and consistency
+    alias kubectl='oc'
+    # Replace eza alias if exists
+    alias ls >/dev/null && unalias ls
+
+    echo "# Environment configured:"
+    echo "  KUBECONFIG=$KUBECONFIG"
+    echo "  APP_NAME=$APP_NAME"
+    echo "  APP_NAMESPACE=$APP_NAMESPACE"
+    echo "# Aliases configured:"
+    echo "  'kubectl' aliased to 'oc'"
+    echo "  'ls' unaliased
+    ```
+
+    ```bash
+    source setup_env.sh
+    ```
+
 1.  **Build the container image:**
 
     Since you are likely building on a Mac (ARM64) and deploying to an OpenShift cluster (likely AMD64), you need to specify the target platform:
 
     ```bash
-    podman build --platform linux/amd64 -t quay.io/$QUAY_USER/ocp-console-plugin:latest .
+    podman build --platform linux/amd64 -t quay.io/$QUAY_USER/$APP_NAME:latest .
     ```
 
 2.  **Push the image:**
 
     ```bash
-    podman push quay.io/$QUAY_USER/ocp-console-plugin:latest
+    podman push quay.io/$QUAY_USER/$APP_NAME:latest
     ```
 
     > [!NOTE]
@@ -96,7 +128,8 @@ The build artifacts will be in the `dist` directory.
     Patch the Console Operator config to enable the plugin. Use a JSON patch to append to the list of plugins instead of replacing it:
 
     ```bash
-    oc patch console.operator.openshift.io cluster --type=json --patch '[{"op": "add", "path": "/spec/plugins/-", "value": "ocp-console-plugin"}]'
+    oc patch console.operator.openshift.io cluster --type=json \
+      --patch '[{"op": "add", "path": "/spec/plugins/-", "value": "ocp-console-plugin"}]'
     ```
 
     The OpenShift console will reload to apply the changes. You should see a notification that the console has been updated.
@@ -108,36 +141,11 @@ During development, you can deploy changes to the cluster using the following co
 ```bash
 source setup_env.sh && \
     make build push && \
-    oc rollout restart deployment/ocp-console-plugin -n "$NAMESPACE" && \
-    oc wait --for=condition=ready pod -l "$APP_SELECTOR" -n "$NAMESPACE" --timeout=60s
+    oc rollout restart deployment/$APP_NAME -n "$APP_NAMESPACE" && \
+    oc wait --for=condition=ready pod -l app=$APP_NAME -n "$APP_NAMESPACE" --timeout=60s
 ```
 
-Example `setup_env.sh`:
 
-```bash
-#!/bin/bash
-
-# OpenShift Environment Setup Script
-# Usage: source setup_env.sh
-
-# Set the KUBECONFIG environment variable to the user's preferred path
-export KUBECONFIG=/Users/dale/.kube/ocp/hub/kubeconfig
-export NAMESPACE=ocp-console-example
-export APP_SELECTOR='app=ocp-console-plugin'
-
-# Alias kubectl to oc for convenience and consistency
-alias kubectl='oc'
-# Replace eza alias if exists
-alias ls >/dev/null && unalias ls
-
-echo "# Environment configured:"
-echo "  KUBECONFIG=$KUBECONFIG"
-echo "  NAMESPACE=$NAMESPACE"
-echo "  APP_SELECTOR=$APP_SELECTOR"
-echo "# Aliases configured:"
-echo "  'kubectl' aliased to 'oc'"
-echo "  'ls' unaliased
-```
 
 ## Troubleshooting
 
@@ -146,19 +154,19 @@ If the plugin does not appear in the console:
 1.  **Check the Plugin Pod:**
     Ensure the plugin pod is running and ready:
     ```bash
-    oc get pods -l app=ocp-console-plugin
+    oc get pods -l app=$APP_NAME -n $APP_NAMESPACE
     ```
 
 2.  **Verify Manifest Availability:**
     Check if the plugin manifest is being served correctly:
     ```bash
-    oc exec -n default deployment/ocp-console-plugin -- curl -k https://localhost:9443/plugin-manifest.json
+    oc exec -n default deployment/$APP_NAME -- curl -k https://localhost:9443/plugin-manifest.json
     ```
 
 3.  **Check ConsolePlugin Status:**
     See if the Console Operator has successfully registered the plugin:
     ```bash
-    oc get consoleplugin ocp-console-plugin -o yaml
+    oc get consoleplugin $APP_NAME -o yaml
     ```
     Look for the `Available` condition.
 
