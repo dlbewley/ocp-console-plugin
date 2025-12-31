@@ -134,6 +134,10 @@ The build artifacts will be in the `dist` directory.
 
     The OpenShift console will reload to apply the changes. You should see a notification that the console has been updated.
 
+## How to Uninstall
+
+Use [uninstall.sh](uninstall.sh) to uninstall the plugin.
+
 ### Development Deployment
 
 During development, you can deploy changes to the cluster using the following command:
@@ -179,13 +183,10 @@ If the plugin does not appear in the console:
   >
   > Also, ensure that the `section` ID in `console-extensions.json` matches the internal ID of the section (e.g., "home" instead of "Home").
 
-## Verification
-
-I have verified that the project builds successfully and generates the expected assets in the `dist` directory.
-
 ## References
 
 -   [OpenShift Console Dynamic Plugin SDK](https://github.com/openshift/console/tree/master/frontend/packages/console-dynamic-plugin-sdk)
 -   [Dynamic Plugin SDK README](https://www.npmjs.com/package/@openshift-console/dynamic-plugin-sdk)
 -   [PatternFly React Documentation](https://www.patternfly.org/v4/components)
 -   [OpenShift Console GitHub Repository](https://github.com/openshift/console)
+-   Network visualization features have moved to [OVN Recon](https://github.com/dlbewley/ovn-recon) projet
