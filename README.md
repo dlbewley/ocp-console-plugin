@@ -65,7 +65,7 @@ The build artifacts will be in the `dist` directory.
 
 ## How to Deploy
 
-0. **Create and sources a `setup_env.sh`.**
+0. **Create and source a `setup_env.sh`.**
 
     Example `setup_env.sh`:
 
@@ -112,8 +112,8 @@ The build artifacts will be in the `dist` directory.
     podman push quay.io/$QUAY_USER/$APP_NAME:latest
     ```
 
-    > [!NOTE]
-    > Make sure to update the image reference in `manifests/deployment.yaml` to match your repository.
+  > [!NOTE]
+  > Make sure to update the image reference in `manifests/deployment.yaml` to match your repository.
 
 3.  **Deploy to OpenShift:**
 
@@ -145,8 +145,6 @@ source setup_env.sh && \
     oc wait --for=condition=ready pod -l app=$APP_NAME -n "$APP_NAMESPACE" --timeout=60s
 ```
 
-
-
 ## Troubleshooting
 
 If the plugin does not appear in the console:
@@ -176,10 +174,10 @@ If the plugin does not appear in the console:
     oc rollout restart deployment/console -n openshift-console
     ```
 
-    > [!IMPORTANT]
-    > Ensure your `consoleplugin.yaml` uses `apiVersion: console.openshift.io/v1`. The older `v1alpha1` API may cause the `backend` field to be dropped, preventing the plugin from loading.
-    >
-    > Also, ensure that the `section` ID in `console-extensions.json` matches the internal ID of the section (e.g., "home" instead of "Home").
+  > [!IMPORTANT]
+  > Ensure your `consoleplugin.yaml` uses `apiVersion: console.openshift.io/v1`. The older `v1alpha1` API may cause the `backend` field to be dropped, preventing the plugin from loading.
+  >
+  > Also, ensure that the `section` ID in `console-extensions.json` matches the internal ID of the section (e.g., "home" instead of "Home").
 
 ## Verification
 
